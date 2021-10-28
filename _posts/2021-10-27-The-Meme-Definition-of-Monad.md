@@ -1,5 +1,5 @@
 ---
-title: 'Explained in Typescript: The Meme Definition of Monad'
+title: 'The Meme Definition of Monad'
 author: ThatsNoMoon
 tags: [typescript, functional-programming, type-systems, category-theory]
 categories: [Write-ups]
