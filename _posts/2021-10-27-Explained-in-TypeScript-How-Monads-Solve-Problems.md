@@ -4,16 +4,215 @@ author: ThatsNoMoon
 tags: [typescript, functional-programming]
 categories: [Write-ups]
 ---
-There's a half-joke definition for what a monad is that floats around sometimes:
 
-> A monad is a monoid in the category of endofunctors
+# Introduction: Callbacks
 
-And I can't resist a good teaching opportunity. My explanation as to why this is
-true, for programmers, touches on category theory, group theory, and... I'm sure
-there's something in here that isn't a theory. So, for the interested, let's get
-started!
+Imagine, for a moment, that it's 2013, you're involved in the language design of JavaScript, and you have a problem: callbacks are a mess. Because of the way the web was designed, JavaScript has to use asynchronous programming for I/O like making HTTP requests, but the only way to handle such async operations is to pass functions into other functions which pass other functions into more functions, on and on ad nauseum:
+
+```ts
+function callbackHell(params, errCallback, idCallback) {
+	makeRequest(params, (err, result) => {
+		if (err) {
+			return errCallback(err);
+		}
+		processResults(results, (err, data) => {
+			if (err) {
+				return errCallback(err);
+			}
+			sendResults(data, (err, response) => {
+				if (err) {
+					return cb(err);
+				}
+				idCallback(response.id);
+			});
+		});
+	});
+}
+```
+
+Disgusting! Especially when you consider that if this was synchronous, it would look like:
+
+```ts
+function synchronyHeaven(params) {
+	const results = makeRequest(params);
+	const data = processReslts(results);
+	return sendResults(data);
+}
+```
+
+*(Yes, I'm using ES2015 features, but only because the point of this post isn't to discuss old JavaScript.)*
+
+There are a few things going wrong in our sideways pyramid of doom that callbacks build up:
+- Each callback needs to check if the operation failed manually
+- Every chained operation creates another indentation level
+
+Where do you go from here?
+
+# How we'll discover monads
+
+Whether you've heard of monads or not, my goal with this post is to show how you might discover monads, how monads solve problems, and what makes a monad a monad. This exploration will work best if you're familiar with TypeScript and callback-based asynchronous programming like the above.
+
+# A dissection of callbacks
+
+So, what's so bad about callbacks? From my earlier example, `callbackHell`, we can see the syntax disadvantages: identation floats to the right the more steps we take, and every step has a check for failure. Where do these problems come from? Let's look at an individual step:
+
+```ts
+asyncStep(args, (err, result) => {
+	if (err) {
+		// handle err
+	} else {
+		// use result
+	}
+});
+```
+
+From a certain perspective, we can see how the next step is made *part* of this step; the callback is, visually, inside the call to `asyncStep`. This means any usage of the results of `asyncStep` have to go inside this step using `asyncStep`. We can try to disconnect these steps a bit, like so:
+
+```ts
+asyncStep(args, nextStep);
+
+function nextStep(err, result) {
+	if (err) {
+		// handle err
+	} else {
+		// use result
+	}
+}
+```
+
+Now the next step isn't inside the first step, but the first step still has to know about the second step, so this still isn't ideal.
+
+Let's look at the other problem: every step that follows a fallible step has to check for failure manually. This is because errors are passed next to the result, so we can try splitting the callback up. I'll use the first callback to handle errors, and the second callback to handle successful results:
+
+```ts
+asyncStep(args, nextStepErr, nextStepSuccess);
+
+function nextStepSuccess(result) {
+	// use result
+}
+
+function nextStepErr(err) {
+	// handle err
+}
+```
+
+This looks like it would require twice as many functions, but in many cases, a whole chain of operation uses the same error handling, which reduces the number of functions needed.
+
+Let's try rewriting `callbackHell` with these techniques:
+
+```ts
+function callbackHell(params, errCallback, idCallback) {
+	makeRequest(params, errCallback, processStep);
+
+	function processStep(result) {
+		processResults(results, errCallback, sendStep);
+	}
+
+	function sendStep(data) {
+		sendResults(data, errCallback, finish);
+	}
+
+	function finish(response) {
+		idCallback(response.id);
+	}
+}
+```
+
+Well, I think this looks neater. Whether you agree or not, you probably agree that it's still worse than the synchronous alternative; there's quite a bit of repetition, between creating and using each step and using the provided `errCb` in every step.
+
+# Promises
+
+How can we improve on our last version of `callbackHell`? Considering our goal is to make something as nice as our synchronous version, `synchronyHeaven`, a reasonable first step would be to try to make `const result = makeRequest(params);` meaningful, so let's make `makeRequest` return an object. What should this object do?
+
+Since we're replacing a callback argument, how about we give this object methods to add callbacks:
+
+```ts
+const result = makeRequest(params);
+result.onSuccess(processStep);
+result.onFailure(errCallback);
+```
+
+This is certainly interesting, even if it hasn't made our code shorter. I'll call this object a promise, since it represents a guarantee that something will happen later, either a success or a failure.
+
+Let's look at our `finish` function, and the step before it, translated into our promise style:
+
+```ts
+function sendStep(data) {
+	const response = sendResults(data);
+	response.onFailure(errCallback);
+	response.onSuccess(finish);
+}
+
+function finish(response) {
+	idCallback(response.id);
+}
+```
+
+`finish` is a unique step in our function, as it doesn't do anything asynchronous, so we haven't changed it much yet. I'll examine a possible improvement to `sendStep` by adding a method to our callback object to do a synchronous step first:
+
+```ts
+function sendStep(data) {
+	const response = sendResults(data);
+	response.onFailure(errCallback);
+
+	response.map(response => response.id);
+
+	response.onSuccess(idCallback);
+}
+```
+
+And via a little API manipulation:
+
+```ts
+function sendStep(data) {
+	sendResults(data)
+		.onFailure(errCallback);
+		.map(response => response.id);
+		.onSuccess(idCallback);
+}
+```
+
+That's pretty neat, right? How about we try adding something similar to `map`, but instead executes asynchronous operations:
+
+```ts
+function processStep(results) {
+	processResults(results)
+
+		.andThen(data => sendResults(data))
+
+		.onFailure(errCallback)
+		.map(response => response.id)
+		.onSuccess(idCallback);
+}
+```
+
+Well, that's even better, let's try applying it to the whole function:
+
+```ts
+function promisePurgatory(params) {
+	return makeRequest(params)
+		.andThen(processResults)
+		.andThen(sendResults)
+		.map(response => response.id);
+}
+```
+
+Nice! Notice that we're able to replace the callbacks in this function as well, and return a promise instead.
+
+# Arrays
+
+Let's look at another problem: transforming arrays. Say you're making a social media network, and you have an array of a user's friends. You might want to get an array of their usernames so you can easily display them on your website. It's 2013, so you write out a loop to make a new array:
+
+```ts
+const usernames = [];
+
+for (const user of friends) {
+	usernames.push(user.name);
+}
+```
 
 # Monoids
+
 Monoids, from group theory, are relatively easy to understand in terms of
 familiar programming concepts. A monoid is a set of elements, a way to combine
 them, an identity, and a few rules.
