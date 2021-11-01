@@ -282,7 +282,7 @@ If we compare the solutions we came up with for the above problems, obviously we
 ```ts
 let promiseMap: <T, U>(this: Promise<T>, func: (t: T) => U) => Promise<U>;
 
-let arrayMap:   <T, U>(this: Array<T>,   func: (t: T) => U) => Array<T>;
+let arrayMap:   <T, U>(this: Array<T>,   func: (t: T) => U) => Array<U>;
 ```
 
 We've also created two other methods with the same signature, but different names:
@@ -292,7 +292,7 @@ let promiseAndThen:
     <T, U>(this: Promise<T>, func: (t: T) => Promise<U>) => Promise<U>;
 
 let arrayFlatMap:
-    <T, U>(this: Array<T>,   func: (t: T) => Array<U>)   => Array<T>;
+    <T, U>(this: Array<T>,   func: (t: T) => Array<U>)   => Array<U>;
 ```
 
 # Functor
